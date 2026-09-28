@@ -1,0 +1,14 @@
+{
+  "name": "토익 900 복습",
+  "short_name": "토익 복습",
+  "description": "8주 기출 학습 계획에 맞춘 토익 단어·오답 복습 앱",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f6fb",
+  "theme_color": "#2f5bd3",
+  "lang": "ko",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
