@@ -22,9 +22,15 @@ python3 -m http.server 8000
 
 ### 휴대폰에서 쓰기 (GitHub Pages)
 
-1. GitHub 저장소 → Settings → Pages → Branch를 이 브랜치(또는 main) / root 로 지정
-2. 발급된 주소를 휴대폰 브라우저로 열기
-3. iPhone Safari: 공유 → 홈 화면에 추가 / Android Chrome: 메뉴 → 앱 설치
+> github.com 저장소 주소나 파일(raw) 주소로는 코드만 보이고 앱이 실행되지 않아요. 아래처럼 Pages를 한 번 켜야 앱 주소가 생깁니다.
+
+1. PC 또는 모바일 브라우저에서 https://github.com/gyu2754-netizen/-/settings/pages 접속
+2. **Build and deployment → Source: Deploy from a branch**
+3. **Branch: `claude/toeic-review-app-3j0y1j`**, 폴더 **`/ (root)`** 선택 → **Save**
+4. 1~2분 뒤 같은 페이지 위쪽에 뜨는 주소로 접속: **https://gyu2754-netizen.github.io/-/** (끝의 `/` 포함)
+5. iPhone Safari: 공유 → 홈 화면에 추가 / Android Chrome: 메뉴 → 앱 설치
+
+앱이 빈 화면이면 화면에 오류 메시지가 표시되니 그 내용을 알려주세요.
 
 ## 데이터
 
