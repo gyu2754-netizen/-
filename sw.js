@@ -1,5 +1,5 @@
 // 오프라인에서도 열리도록 앱 파일을 캐시. 파일을 바꾸면 CACHE 버전을 올리세요.
-const CACHE = 'toeic-review-v4';
+const CACHE = 'toeic-review-v5';
 const ASSETS = ['./', 'index.html', 'css/style.css', 'js/data.js', 'js/ocr.js', 'js/app.js', 'manifest.webmanifest', 'icon.svg'];
 
 self.addEventListener('install', (e) => {

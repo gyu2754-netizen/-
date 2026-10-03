@@ -23,8 +23,9 @@ function defaultState() {
   for (let i = 1; i <= 10; i++) tests[i] = { status: '미시작' };
   return {
     version: 1,
-    settings: { startDate: '', examWeek: false, newWordGoal: 35 },
+    settings: { newWordGoal: 35, studyMinutes: 90 },
     tests,
+    voca: {}, // 보카 DAY → 끝낸 날짜
     mistakes: [],
     words: [],
     checklist: {},
@@ -79,12 +80,55 @@ const ui = {
 const timer = { presetKey: 'p5', total: 12 * 60, left: 12 * 60, running: false, handle: null, startedAt: 0, elapsedBefore: 0 };
 
 /* ---------- 계산 ---------- */
-function currentWeek() {
-  const sd = state.settings.startDate;
-  if (!sd) return null;
-  const d = diffDays(sd, today());
-  if (d < 0) return 0;
-  return Math.floor(d / 7) + 1;
+// 회차의 다음 단계: solve → review → nextDay → weekAfter → done
+function testStep(n) {
+  const t = state.tests[n];
+  if (t.status === '미시작') return 'solve';
+  if (t.status === '풀이 완료') return 'review';
+  if (t.status === '복습 완료') return 'done';
+  if (!t.nextDay) return 'nextDay';
+  if (!t.weekAfter) return 'weekAfter';
+  return 'done';
+}
+
+// 재확인 단계를 할 수 있는 날 (풀이 날짜 기준 다음 날 / 7일 뒤)
+function stepAvailableFrom(n, step) {
+  const d = state.tests[n].date;
+  if (!d) return today();
+  if (step === 'nextDay') return addDays(d, 1);
+  if (step === 'weekAfter') return addDays(d, 7);
+  return today();
+}
+
+const TEST_NUMS = Array.from({ length: TEST_COUNT }, (_, i) => i + 1);
+
+function progress() {
+  const steps = Object.fromEntries(TEST_NUMS.map((n) => [n, testStep(n)]));
+  const nextSolve = TEST_NUMS.find((n) => steps[n] === 'solve') || null;
+  const reviewing = TEST_NUMS.filter((n) => steps[n] === 'review');
+  const checks = TEST_NUMS.filter((n) => steps[n] === 'nextDay' || steps[n] === 'weekAfter')
+    .map((n) => ({ n, step: steps[n], from: stepAvailableFrom(n, steps[n]) }));
+  const focus = reviewing[0] || nextSolve;
+  const stageIdx = focus ? STAGES.findIndex((st) => st.tests.includes(focus)) : STAGES.length;
+  const allDone = TEST_NUMS.every((n) => steps[n] === 'done');
+  return { steps, nextSolve, reviewing, checks, focus, stageIdx, allDone };
+}
+
+const nextVocaDay = () => {
+  for (let d = 1; d <= VOCA_DAYS; d++) if (!state.voca[d]) return d;
+  return null;
+};
+const vocaDoneCount = () => Object.keys(state.voca).filter((d) => state.voca[d]).length;
+
+// 현재 단계의 보카 권장 범위와 비교
+function vocaPace(stageIdx) {
+  const st = STAGES[stageIdx];
+  const next = nextVocaDay();
+  if (!st || !st.voca) return { text: st ? st.vocaNote : '보카 전체 복습', tone: '' };
+  const [a, b] = st.voca;
+  if (next === null || next > b) return { text: `권장 DAY ${a}~${b} · 앞서가고 있어요`, tone: 'good' };
+  if (next < a) return { text: `권장 DAY ${a}~${b} · DAY ${next}부터 따라잡기`, tone: 'warn' };
+  return { text: `권장 DAY ${a}~${b}`, tone: '' };
 }
 
 const dueWords = () => state.words
@@ -119,9 +163,10 @@ const $main = document.getElementById('main');
 
 function render() {
   document.querySelectorAll('#tabbar button').forEach((b) => b.classList.toggle('active', b.dataset.tab === ui.tab));
-  const wk = currentWeek();
+  const pr = progress();
+  const vd = nextVocaDay();
   document.getElementById('weekBadge').textContent =
-    state.settings.examWeek ? '시험 주간' : wk === null ? '시작일 미정' : wk === 0 ? '시작 전' : wk > 8 ? '8주 완료' : `${wk}주차`;
+    pr.allDone ? '기출 완료' : `TEST ${pr.focus} · ${vd ? `DAY ${vd}` : '보카 완료'}`;
   $main.innerHTML = VIEWS[ui.tab]();
   if (ui.tab === 'words' && ui.wordSub === 'list') renderWordList();
   if (ui.tab === 'more' && ui.moreSub === 'timer') updateTimerDisplay();
@@ -136,59 +181,78 @@ function seg(name, current, items) {
 function viewHome() {
   const t = today();
   const dow = new Date().getDay();
-  const wk = currentWeek();
-  const sched = state.settings.examWeek ? EXAM_WEEK_SCHEDULE : SCHEDULE[dow];
+  const pr = progress();
   const dw = dueWords().length;
   const dm = dueMistakes().length;
   const newToday = (state.log[t] && state.log[t].newWords) || 0;
-  const goal = state.settings.examWeek ? 10 : state.settings.newWordGoal;
+  const goal = state.settings.newWordGoal;
   const warn = backlogWarning();
   const checks = state.checklist[t] || [];
-  const plan = wk && wk >= 1 && wk <= 8 ? PLAN[wk - 1] : null;
+  const vd = nextVocaDay();
+  const st = STAGES[pr.stageIdx];
+  const pace = vocaPace(pr.stageIdx);
 
-  let html = '';
-  if (!state.settings.startDate) {
-    html += `<section class="card accent">
-      <h2>시작일을 정해 주세요</h2>
-      <p class="muted">시작일을 넣으면 오늘이 몇 주차인지, 이번 주 기출·보카 진도를 알려드려요.</p>
-      <form data-form="startDate" class="row">
-        <input type="date" name="startDate" value="${t}" required>
-        <button class="btn primary">시작</button>
-      </form>
-    </section>`;
-  }
-  if (warn) html += `<div class="alert">${warn}</div>`;
+  let html = warn ? `<div class="alert">${warn}</div>` : '';
 
+  // 지금 진도
   html += `<section class="card">
-    <h2>오늘 복습 <span class="muted small">${t} (${DOW[dow]})</span></h2>
-    <div class="stats">
-      <button class="stat" data-action="go" data-tab="words" data-sub="review"><b>${dw}</b><span>단어 복습</span></button>
-      <button class="stat" data-action="go" data-tab="mistakes" data-sub="review"><b>${dm}</b><span>오답 재확인</span></button>
-      <button class="stat" data-action="go" data-tab="words" data-sub="add"><b>${newToday}<small>/${goal}</small></b><span>오늘 새 단어</span></button>
-    </div>
-    ${warn && newToday < goal ? '<p class="small warn-text">복습이 밀린 날은 새 단어를 목표보다 적게 추가하세요.</p>' : ''}
+    <h2>지금 진도</h2>
+    <div class="test-dots">${TEST_NUMS.map((n) => {
+      const sp = pr.steps[n];
+      return `<button class="dot ${sp}${n === pr.focus ? ' focus' : ''}" data-action="openTestFromHome" data-n="${n}" title="TEST ${n}: ${TEST_STEPS[sp].label}">${n}</button>`;
+    }).join('')}</div>
+    <p class="small muted legend"><span class="dot-l solve"></span>미시작 <span class="dot-l review"></span>오답 정리 <span class="dot-l nextDay"></span>재확인 <span class="dot-l done"></span>완료</p>
+    ${st ? `<dl class="kv">
+      <dt>단계 ${pr.stageIdx + 1}/${STAGES.length}</dt><dd>${st.tests.map((n) => `TEST ${n}`).join('·')} — ${esc(st.goal)}</dd>
+      <dt>보카</dt><dd>${vd ? `다음 <b>DAY ${vd}</b>` : '30 DAY 완료'} <span class="small ${pace.tone === 'warn' ? 'warn-text' : 'muted'}">(${esc(pace.text)})</span></dd>
+    </dl>` : '<p class="muted">TEST 1~10을 모두 마쳤어요. 헷갈린 단어·반복 오답을 정리하세요.</p>'}
   </section>`;
 
+  // 다음 할 일 (진도에 따라)
+  const tasks = [];
+  if (dw) tasks.push({ title: `단어 복습 ${dw}개`, desc: '뜻을 가리고 떠올리기', btn: ['go', '복습하기', 'data-tab="words" data-sub="review"'] });
+  if (dm) tasks.push({ title: `오답 재확인 ${dm}개`, desc: '정답 근거를 설명할 수 있는지', btn: ['go', '재확인하기', 'data-tab="mistakes" data-sub="review"'] });
+  pr.checks.filter((c) => c.from <= t).forEach((c) => tasks.push({
+    title: `TEST ${c.n} ${TEST_STEPS[c.step].label}`, desc: TEST_STEPS[c.step].desc,
+    btn: ['testStep', '했어요', `data-n="${c.n}" data-step="${c.step}"`],
+  }));
+  pr.reviewing.forEach((n) => tasks.push({
+    title: `TEST ${n} 오답 정리`, desc: TEST_STEPS.review.desc,
+    btn: ['testStep', '정리 끝', `data-n="${n}" data-step="review"`],
+    btn2: ['go', '오답 기록', 'data-tab="mistakes" data-sub="add"'],
+  }));
+  if (pr.nextSolve) {
+    const blocked = pr.reviewing.length ? `TEST ${pr.reviewing.join('·')} 오답 정리를 먼저 끝내세요.` : warn ? '복습이 밀려 있어요. 새 회차는 복습을 끝낸 뒤에.' : '';
+    tasks.push({
+      title: `TEST ${pr.nextSolve} 실전 풀이`,
+      desc: TEST_STEPS.solve.desc + (pr.nextSolve >= 9 ? ' · 마지막 점검용 회차예요.' : ''),
+      blocked,
+      btn: ['testStep', '풀이 끝', `data-n="${pr.nextSolve}" data-step="solve"`],
+      btn2: ['go', '타이머', 'data-tab="more" data-sub="timer"'],
+    });
+  }
+  if (vd) {
+    tasks.push({
+      title: `보카 DAY ${vd}`, desc: warn ? '복습이 밀린 날은 새 단어를 줄이세요.' : `새 단어 ${goal}개 내외 · 오늘 ${newToday}개 추가`,
+      btn: ['vocaDone', 'DAY 끝', `data-day="${vd}"`],
+      btn2: ['go', '단어 추가', 'data-tab="words" data-sub="add"'],
+    });
+  }
+  const later = pr.checks.filter((c) => c.from > t);
+
   html += `<section class="card">
-    <h2>오늘 스케줄 <span class="muted small">${sched.time}${state.settings.examWeek ? ' · 시험 주간 축소' : ''}</span></h2>
-    <ul class="bullets">${sched.items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>
-    <label class="switch"><input type="checkbox" data-action="examWeek" ${state.settings.examWeek ? 'checked' : ''}> 학교 시험 주간 (학업 우선, 하루 45분으로 축소)</label>
+    <h2>다음 할 일 <span class="muted small">${t} (${DOW[dow]})</span></h2>
+    <ol class="tasks">${tasks.map((k) => `<li class="${k.blocked ? 'blocked' : ''}">
+      <div class="grow"><b>${esc(k.title)}</b><div class="small muted">${esc(k.desc)}</div>${k.blocked ? `<div class="small warn-text">${esc(k.blocked)}</div>` : ''}</div>
+      <div class="task-btns">
+        ${k.btn2 ? `<button class="btn small-btn" data-action="${k.btn2[0]}" ${k.btn2[2]}>${k.btn2[1]}</button>` : ''}
+        <button class="btn small-btn primary" data-action="${k.btn[0]}" ${k.btn[2]}>${k.btn[1]}</button>
+      </div>
+    </li>`).join('')}</ol>
+    ${later.length ? `<p class="small muted">예정: ${later.map((c) => `TEST ${c.n} ${TEST_STEPS[c.step].label} (${c.from}부터)`).join(' · ')}</p>` : ''}
   </section>`;
 
-  if (plan) {
-    html += `<section class="card">
-      <h2>${plan.week}주차 진도</h2>
-      <dl class="kv">
-        <dt>기출</dt><dd>${esc(plan.tests)}</dd>
-        <dt>핵심 목표</dt><dd>${esc(plan.goal)}</dd>
-        <dt>보카</dt><dd>${esc(plan.voca)}</dd>
-      </dl>
-      ${plan.week < 7 ? '<p class="small muted">TEST 9·10은 마지막 점검용이라 미리 보지 않아요.</p>' : ''}
-      ${plan.week === 1 ? `<p class="small muted">첫 진단: TEST 1을 LC 약 45분, RC 75분으로. 중간 정지·사전 검색·중간 채점 없이, 헷갈리거나 찍은 문제는 표시하세요.</p>` : ''}
-    </section>`;
-  } else if (wk > 8) {
-    html += `<section class="card"><h2>8주 계획 완료</h2><p class="muted">회차 탭에서 전체 기록을 돌아보고, 헷갈린 단어·반복 오답을 정리하세요.</p></section>`;
-  }
+  html += viewTimePlan(pr, dw, dm, vd, warn);
 
   html += `<section class="card">
     <h2>매일 체크리스트</h2>
@@ -196,10 +260,47 @@ function viewHome() {
   </section>`;
 
   if (dow === 0) {
-    html += `<section class="card accent"><h2>일요일: 주간 점검</h2><p class="muted">이번 주 반복된 실수와 다음 주 조정을 기록하세요.</p>
+    html += `<section class="card accent"><h2>주간 점검</h2><p class="muted">이번 주 반복된 실수와 다음 주 조정을 기록하세요.</p>
       <button class="btn primary" data-action="go" data-tab="more" data-sub="weekly">주간 점검 쓰기</button></section>`;
   }
   return html;
+}
+
+// 오늘 쓸 수 있는 시간에 맞춰, 진도에서 할 일을 채운 시간표
+function viewTimePlan(pr, dw, dm, vd, warn) {
+  const min = state.settings.studyMinutes;
+  const plan = TIME_PLANS.find((p) => p.min === min) || TIME_PLANS[1];
+  const due = dueMistakes();
+  const lcDue = due.filter((m) => m.part <= 4).length;
+  const rcDue = due.length - lcDue;
+  const rv = pr.reviewing[0];
+  const t = today();
+  const checksNow = pr.checks.filter((c) => c.from <= t);
+  const canSolve = pr.nextSolve && !pr.reviewing.length && !warn;
+  const nothingSolved = TEST_NUMS.every((n) => pr.steps[n] === 'solve');
+
+  const fill = {
+    word: [dw ? `복습 ${dw}개 먼저` : '', vd && !warn ? `보카 DAY ${vd} 새 단어` : warn ? '새 단어는 줄이기' : '헷갈린 단어 재학습'].filter(Boolean).join(' → '),
+    lc: rv ? `TEST ${rv} LC 오답 6단계 복습` : lcDue ? `LC 오답 재확인 ${lcDue}개` : nothingSolved ? 'TEST 1 진단은 LC 45분을 끊지 않고 풀 수 있는 날에' : '푼 회차의 LC 취약 Part 다시 듣기·따라 말하기',
+    rc: rv ? `TEST ${rv} RC 오답: 근거 문장·바꿔 표현 정리` : rcDue ? `RC 오답 재확인 ${rcDue}개` : nothingSolved ? 'TEST 1 진단은 RC 75분을 끊지 않고 풀 수 있는 날에' : '푼 회차의 Part 5·6 오답 개념, Part 7 근거 찾기',
+    recheck: checksNow.length ? checksNow.map((c) => `TEST ${c.n} ${TEST_STEPS[c.step].label}`).join(', ') : '누적 오답 목록 훑기',
+  };
+  const names = { word: '단어', lc: 'LC', rc: 'RC', recheck: '재확인' };
+  // LC 45분 + RC 75분 = 2시간이 들어가는 날에만 실전 회차를 넣음
+  const solveDay = min >= 150 && canSolve;
+  const rows = solveDay
+    ? [[`실전 2시간`, `TEST ${pr.nextSolve} LC·RC 실전 풀이 (타이머 사용)`],
+      min >= 240 ? ['핵심 복습 2시간', `TEST ${pr.nextSolve} 채점 → 오답 다시 판단 → 원인 기록`] : ['단어 30분', fill.word]]
+    : Object.entries(plan.blocks).map(([k, m]) => [`${names[k]} ${m}분`, fill[k]]);
+
+  return `<section class="card">
+    <h2>오늘 시간 배분</h2>
+    <div class="chips">${TIME_PLANS.map((p) => `<button class="chip ${p.min === plan.min ? 'on' : 'ghost'}" data-action="studyMin" data-min="${p.min}">${p.label}</button>`).join('')}</div>
+    ${plan.note ? `<p class="small muted">${esc(plan.note)}</p>` : ''}
+    <table class="score-table compact plan-table"><tbody>${rows.map(([a, b]) => `<tr><td>${esc(a)}</td><td>${esc(b)}</td></tr>`).join('')}</tbody></table>
+    ${min >= 150 && pr.nextSolve && !canSolve ? '<p class="small muted">밀린 복습을 끝내면 이 시간에 다음 회차 실전을 넣어 드려요.</p>' : ''}
+    <p class="small muted">진도가 밀려도 괜찮아요. 날짜가 아니라 끝낸 만큼 다음 단계로 넘어가요.</p>
+  </section>`;
 }
 
 /* ===== 단어 ===== */
@@ -247,7 +348,8 @@ function viewWordReview(due) {
 function viewWordForm() {
   const w = ui.editWord ? state.words.find((x) => x.id === ui.editWord) : null;
   const v = (k) => esc(w ? w[k] || '' : '');
-  const lastSource = state.words.length ? state.words[state.words.length - 1].source || '' : '';
+  const nv = nextVocaDay();
+  const lastSource = (state.words.length ? state.words[state.words.length - 1].source || '' : '') || (nv ? `보카 DAY ${nv}` : '');
   return `${w ? '' : viewOcrCard()}
   <section class="card">
     <h2>${w ? '단어 수정' : '단어 추가'}</h2>
@@ -558,27 +660,45 @@ function viewMistakeList() {
   </section>`;
 }
 
-/* ===== 회차 ===== */
+/* ===== 진도 ===== */
 function viewTests() {
-  const wk = currentWeek();
+  const pr = progress();
+  const vd = nextVocaDay();
   let html = `<section class="card">
-    <h2>TEST 1~10 기록</h2>
-    <p class="small muted">정답 수를 실제 토익 점수로 단정하지 않아요. 같은 문제의 재풀이 점수와 새 문제 실력은 구분하세요.</p>
+    <h2>기출 TEST 1~10</h2>
+    <p class="small muted">회차를 누르면 기록·다음 단계를 볼 수 있어요. 정답 수를 실제 점수로 단정하지 않고, 재풀이 점수와 새 문제 실력은 구분해요.</p>
     <table class="score-table">
-      <thead><tr><th>회차</th><th>상태</th><th>LC</th><th>RC</th><th>RC 미완료</th></tr></thead>
-      <tbody>${Array.from({ length: 10 }, (_, i) => i + 1).map((n) => {
+      <thead><tr><th>회차</th><th>다음 단계</th><th>LC</th><th>RC</th><th>미완료</th></tr></thead>
+      <tbody>${TEST_NUMS.map((n) => {
         const t = state.tests[n];
+        const sp = pr.steps[n];
         return `<tr data-action="openTest" data-n="${n}" class="${ui.openTest === n ? 'sel' : ''}">
-          <td>TEST ${n}</td><td><span class="status s${TEST_STATUSES.indexOf(t.status)}">${esc(t.status)}</span></td>
+          <td>TEST ${n}</td><td><span class="status st-${sp}">${TEST_STEPS[sp].label}</span></td>
           <td>${t.lc ?? '-'}</td><td>${t.rc ?? '-'}</td><td>${t.rcUnfinished ?? '-'}</td></tr>`;
       }).join('')}</tbody>
     </table>
   </section>`;
-  if (ui.openTest) html += viewTestDetail(ui.openTest, wk);
+  if (ui.openTest) html += viewTestDetail(ui.openTest, pr);
+  html += `<section class="card">
+    <h2>해커스 보카 <span class="muted small">${vocaDoneCount()}/${VOCA_DAYS} DAY</span></h2>
+    <p class="small muted">끝낸 DAY를 누르세요. 다시 누르면 취소돼요. ${vd ? `다음은 DAY ${vd}.` : ''}</p>
+    <div class="voca-grid">${Array.from({ length: VOCA_DAYS }, (_, i) => i + 1).map((d) =>
+      `<button class="voca ${state.voca[d] ? 'on' : ''}${d === vd ? ' next' : ''}" data-action="vocaToggle" data-day="${d}">${d}</button>`).join('')}</div>
+  </section>
+  <section class="card">
+    <h2>진도 단계</h2>
+    <p class="small muted">날짜가 아니라 TEST 진도로 단계가 넘어가요. 단계마다 보카는 권장 범위만큼 같이 가면 좋아요.</p>
+    <ol class="stages">${STAGES.map((st, i) => {
+      const state_ = i < pr.stageIdx ? 'done' : i === pr.stageIdx ? 'now' : '';
+      return `<li class="${state_}"><b>${st.tests.map((n) => `TEST ${n}`).join('·')}</b> ${state_ === 'now' ? '<span class="chip">지금</span>' : state_ === 'done' ? '<span class="chip ghost">완료</span>' : ''}
+        <div class="small">${esc(st.goal)}</div>
+        <div class="small muted">보카: ${st.voca ? `DAY ${st.voca[0]}~${st.voca[1]}` : esc(st.vocaNote)}</div></li>`;
+    }).join('')}</ol>
+  </section>`;
   return html;
 }
 
-function viewTestDetail(n, wk) {
+function viewTestDetail(n, pr) {
   const t = state.tests[n];
   const ms = state.mistakes.filter((m) => m.test === n);
   const counts = causeCounts(ms);
@@ -587,7 +707,14 @@ function viewTestDetail(n, wk) {
   const guessed = ms.filter((m) => m.kind === '찍어서 맞힘').length;
   return `<section class="card" id="testDetail">
     <h2>TEST ${n}</h2>
-    ${(n >= 9 && wk !== null && wk < 7) ? '<div class="alert">TEST 9·10은 마지막 점검용이에요. 7주차 전에는 미리 보지 마세요.</div>' : ''}
+    ${(n >= 9 && TEST_NUMS.some((k) => k < 9 && pr.steps[k] === 'solve')) ? '<div class="alert">TEST 9·10은 마지막 점검용이에요. TEST 1~8을 먼저 풀고, 미리 보지 마세요.</div>' : ''}
+    ${(() => {
+      const sp = pr.steps[n];
+      if (sp === 'done') return '<p class="small muted">이 회차는 학습 순서를 모두 마쳤어요.</p>';
+      const from = stepAvailableFrom(n, sp);
+      return `<div class="next-step"><div class="grow"><b>다음 단계: ${TEST_STEPS[sp].label}</b><div class="small muted">${esc(TEST_STEPS[sp].desc)}${from > today() ? ` · ${from}부터` : ''}</div></div>
+        <button class="btn small-btn primary" data-action="testStep" data-n="${n}" data-step="${sp}">${sp === 'solve' ? '풀이 끝' : sp === 'review' ? '정리 끝' : '했어요'}</button></div>`;
+    })()}
     <form data-form="test" data-n="${n}" class="form">
       <div class="row two">
         <label>풀이 날짜<input type="date" name="date" value="${esc(t.date || '')}"></label>
@@ -663,7 +790,6 @@ function viewWeekly() {
   }
   const repeated = state.mistakes.filter((m) => (m.fails || 0) > 0 && m.lastSeen && inWeek(m.lastSeen));
   const past = Object.keys(state.weekly).filter((k) => k !== ws).sort().reverse();
-  const wk = state.settings.startDate ? Math.floor(diffDays(state.settings.startDate, ws) / 7) + 1 : null;
   return `<section class="card">
     <h2>이번 주 요약 <span class="muted small">${ws} ~ ${we}</span></h2>
     <div class="stats">
@@ -677,7 +803,7 @@ function viewWeekly() {
     ${repeated.length ? `<p class="small warn-text">이번 주 다시 틀린 문제 ${repeated.length}개: ${repeated.slice(0, 5).map(mistakeTitle).join(', ')}</p>` : ''}
   </section>
   <section class="card">
-    <h2>주간 점검${wk && wk > 0 ? ` · ${wk}주차` : ''}</h2>
+    <h2>주간 점검</h2>
     <form data-form="weekly" data-week="${ws}" class="form">
       ${WEEKLY_FIELDS.map(([k, l]) => `<label>${l}<textarea name="${k}" rows="${k === 'repeated' ? 3 : 2}">${esc(w[k] || '')}</textarea></label>`).join('')}
       <button class="btn primary">저장</button>
@@ -698,9 +824,8 @@ function viewSettings() {
   return `<section class="card">
     <h2>설정</h2>
     <form data-form="settings" class="form">
-      <label>시작일<input type="date" name="startDate" value="${esc(s.startDate)}"></label>
       <label>하루 새 단어 목표<input type="number" name="newWordGoal" min="0" max="200" value="${s.newWordGoal}"></label>
-      <label class="switch"><input type="checkbox" name="examWeek" ${s.examWeek ? 'checked' : ''}> 학교 시험 주간 모드</label>
+      <p class="small muted">학교 시험 주간에는 오늘 탭의 시간 배분을 45분으로 고르세요.</p>
       <button class="btn primary">저장</button>
     </form>
   </section>
@@ -786,6 +911,30 @@ function answerMistake(id, ok) {
   syncTestStatus(m.test);
 }
 
+function completeTestStep(n, step) {
+  const t = state.tests[n];
+  if (step === 'solve') {
+    t.status = '풀이 완료';
+    t.date = t.date || today();
+    ui.tab = 'tests';
+    ui.openTest = n;
+    toast(`TEST ${n} 풀이 완료 · 점수를 기록하고 오답을 정리하세요`);
+  } else if (step === 'review') {
+    t.status = '복습 중';
+    toast(`TEST ${n} 오답 정리 완료 · 다음 날 재확인해요`);
+  } else if (step === 'nextDay') {
+    if (t.status !== '복습 완료') t.status = '복습 중';
+    t.nextDay = true;
+    toast(`TEST ${n} 다음 날 재확인 완료`);
+  } else if (step === 'weekAfter') {
+    t.nextDay = true;
+    t.weekAfter = true;
+    t.status = '복습 완료';
+    toast(`TEST ${n} 학습 순서 완료`);
+  }
+  save();
+}
+
 // 회차 상태를 오답 복습 진행에 맞춰 자동으로 올려줌 (직접 바꾼 값은 존중)
 function syncTestStatus(n) {
   const t = state.tests[n];
@@ -827,10 +976,6 @@ document.addEventListener('submit', (e) => {
   e.preventDefault();
   const d = formData(form);
 
-  if (kind === 'startDate') {
-    state.settings.startDate = d.startDate;
-    toast('시작일을 저장했어요.');
-  }
   if (kind === 'word') {
     if (ui.editWord) {
       const w = state.words.find((x) => x.id === ui.editWord);
@@ -906,9 +1051,7 @@ document.addEventListener('submit', (e) => {
     toast('주간 점검 저장');
   }
   if (kind === 'settings') {
-    state.settings.startDate = d.startDate || '';
     state.settings.newWordGoal = Number(d.newWordGoal) || 0;
-    state.settings.examWeek = !!d.examWeek;
     toast('설정 저장');
   }
   save();
@@ -1032,6 +1175,25 @@ document.addEventListener('click', (e) => {
       download(`toeic-words-${today()}.csv`, '﻿' + [head, ...rows].map((r) => r.map(csvCell).join(',')).join('\n'), 'text/csv');
       return;
     }
+    case 'testStep': completeTestStep(Number(el.dataset.n), el.dataset.step); break;
+    case 'openTestFromHome':
+      ui.tab = 'tests';
+      ui.openTest = Number(el.dataset.n);
+      render();
+      { const dEl = document.getElementById('testDetail'); if (dEl) dEl.scrollIntoView({ block: 'start' }); }
+      return;
+    case 'vocaDone':
+      state.voca[el.dataset.day] = today();
+      save();
+      toast(`보카 DAY ${el.dataset.day} 완료`);
+      break;
+    case 'vocaToggle': {
+      const d = el.dataset.day;
+      if (state.voca[d]) delete state.voca[d]; else state.voca[d] = today();
+      save();
+      break;
+    }
+    case 'studyMin': state.settings.studyMinutes = Number(el.dataset.min); save(); break;
     case 'ocrAdd': addOcrWords(); break;
     case 'ocrParsePaste': if (!parsePastedText()) return; break;
     case 'ocrClipboard': pasteFromClipboard(); return;
@@ -1081,7 +1243,6 @@ document.addEventListener('change', (e) => {
     save();
     return;
   }
-  if (a === 'examWeek') { state.settings.examWeek = el.checked; save(); render(); return; }
   if (a === 'lcStep') { ui.lcSteps[Number(el.dataset.i)] = el.checked; return; }
   if (a === 'mFilter') { ui.mFilter[el.dataset.key] = el.value; render(); return; }
   if (a === 'draftPart') {

@@ -41,29 +41,39 @@ const LC_STEPS = [
   '다음 날 듣고 의미와 정답 근거 다시 확인',
 ];
 
-const PLAN = [
-  { week: 1, tests: 'TEST 1 진단·복습', goal: '취약 파트·오답 원인 파악', voca: 'DAY 1~5' },
-  { week: 2, tests: 'TEST 2', goal: '취약 개념·Part 2·5 보완', voca: 'DAY 6~10' },
-  { week: 3, tests: 'TEST 3', goal: 'Part 3·4 질문 읽기, Part 7 근거 찾기', voca: 'DAY 11~15' },
-  { week: 4, tests: 'TEST 4', goal: '실전 시간 점검·반복 실수 교정', voca: 'DAY 16~20' },
-  { week: 5, tests: 'TEST 5·6', goal: '시간 제한·연계지문 연습 (목: 추가 TEST, 금: 복습)', voca: 'DAY 21~25' },
-  { week: 6, tests: 'TEST 7·8', goal: 'LC 안정화·RC 미완료 문항 감소 (목: 추가 TEST, 금: 복습)', voca: 'DAY 26~30' },
-  { week: 7, tests: 'TEST 9', goal: '새로운 문제로 점검·약점 보완', voca: '헷갈린 단어 재학습' },
-  { week: 8, tests: 'TEST 10', goal: '최종 실전 점검·오답 정리', voca: '기출 오답 표현 복습' },
+// 교재: ETS 토익 정기시험 기출문제집 1000 Vol.5 LC·RC (TEST 1~10), 해커스 토익 기출 보카 (DAY 1~30)
+const TEST_COUNT = 10;
+const VOCA_DAYS = 30;
+
+// 진도 단계. 날짜가 아니라 지금 어느 TEST를 하고 있는지로 단계가 정해짐.
+// voca: 이 단계에서 끝내면 좋은 보카 DAY 범위 (없으면 vocaNote)
+const STAGES = [
+  { tests: [1], goal: '진단: 취약 파트·오답 원인 파악', voca: [1, 5] },
+  { tests: [2], goal: '취약 개념·Part 2·5 보완', voca: [6, 10] },
+  { tests: [3], goal: 'Part 3·4 질문 미리 읽기, Part 7 근거 찾기', voca: [11, 15] },
+  { tests: [4], goal: '실전 시간 점검·반복 실수 교정', voca: [16, 20] },
+  { tests: [5, 6], goal: '시간 제한·연계지문 연습', voca: [21, 25] },
+  { tests: [7, 8], goal: 'LC 안정화·RC 미완료 문항 줄이기', voca: [26, 30] },
+  { tests: [9], goal: '새로운 문제로 점검·약점 보완', vocaNote: '헷갈린 단어 재학습' },
+  { tests: [10], goal: '최종 실전 점검·오답 정리', vocaNote: '기출 오답 표현 복습' },
 ];
 
-// 요일별 스케줄 (0 = 일요일)
-const SCHEDULE = {
-  1: { time: '1시간 30분', items: ['단어 25분', '전주 LC 복습 35분', 'RC 오답 30분'] },
-  2: { time: '1시간 30분', items: ['단어 25분', 'LC 취약 유형 35분', 'Part 5·6 30분'] },
-  3: { time: '1시간 30분', items: ['단어 25분', 'LC 재확인 35분', 'Part 7 30분'] },
-  4: { time: '4시간', items: ['단어 40분', 'LC 80분', 'RC 100분', '재확인 20분'] },
-  5: { time: '4시간', items: ['단어 40분', 'LC 80분', 'RC 100분', '재확인 20분'] },
-  6: { time: '4시간', items: ['이번 주 TEST 실전 2시간', '핵심 복습 2시간'] },
-  0: { time: '2시간 30분', items: ['남은 오답', '누적 복습', '다음 주 조정 (주간 점검)'] },
+// 한 회차 학습 순서 (계획서 4장)
+const TEST_STEPS = {
+  solve: { label: '실전 풀이', desc: 'LC 약 45분 + RC 75분, 마킹 포함. 중간 정지·검색·채점 없이, 헷갈리거나 찍은 문제 표시' },
+  review: { label: '오답 정리', desc: '해설 보기 전에 다시 판단 → 원인 분류·기록 → 막힌 문장·개념만 집중 연습' },
+  nextDay: { label: '다음 날 재확인', desc: '정답 근거를 설명할 수 있는지 다시 확인' },
+  weekAfter: { label: '일주일 뒤 점검', desc: '같은 실수를 반복하는지 점검' },
+  done: { label: '완료', desc: '' },
 };
 
-const EXAM_WEEK_SCHEDULE = { time: '45분', items: ['단어 15분', 'LC 복습 15분', 'RC 오답 15분'] };
+// 하루 공부 시간별 배분 (계획서 요일 스케줄의 비율을 그대로 사용)
+const TIME_PLANS = [
+  { min: 45, label: '45분', note: '학교 시험 주간·바쁜 날', blocks: { word: 15, lc: 15, rc: 15 } },
+  { min: 90, label: '1시간 30분', blocks: { word: 25, lc: 35, rc: 30 } },
+  { min: 150, label: '2시간 30분', blocks: { word: 30, lc: 50, rc: 50, recheck: 20 } },
+  { min: 240, label: '4시간', blocks: { word: 40, lc: 80, rc: 100, recheck: 20 } },
+];
 
 const DAILY_CHECKLIST = [
   '이전에 배운 단어를 가리고 확인했다',
