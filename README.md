@@ -64,7 +64,7 @@ python3 -m http.server 8000
 index.html            화면 틀, 하단 탭
 css/style.css         스타일 (다크 모드 지원)
 js/ocr.js             사진 단어 인식
-js/data.js            계획서 내용 (진도표, 요일 스케줄, 원인 분류, 복습 간격 등)
+js/data.js            교재·진도 단계, 시간 배분, 원인 분류, 복습 간격 등
 js/app.js             화면·저장·복습 일정 로직
 sw.js                 오프라인 캐시
 manifest.webmanifest  홈 화면 설치 정보
