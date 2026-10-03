@@ -73,7 +73,7 @@ const ui = {
   draftPart: 5,
   moreSub: 'timer',
   // 사진 인식: status = idle | working | done | error
-  ocr: { status: 'idle', step: '', progress: 0, error: '', items: [], withKorean: true, markWrong: true },
+  ocr: { status: 'idle', step: '', progress: 0, error: '', items: [], withKorean: true, markWrong: true, source: 'photo', pasteText: '' },
 };
 
 const timer = { presetKey: 'p5', total: 12 * 60, left: 12 * 60, running: false, handle: null, startedAt: 0, elapsedBefore: 0 };
@@ -310,13 +310,28 @@ function viewOcrCard() {
         <button class="btn" data-action="ocrClear">취소</button>
         <button class="btn primary" data-action="ocrAdd" ${n ? '' : 'disabled'}>선택한 ${n}개 추가</button>
       </div>`
-      : `<div class="alert small">사진에서 영어 단어를 찾지 못했어요. 글자가 크고 선명하게, 그림자 없이 정면에서 다시 찍어 보세요.</div>`;
+      : `<div class="alert small">${o.source === 'paste' ? '붙여넣은 글에서 영어 단어를 찾지 못했어요. 영어 단어가 들어 있는지 확인해 주세요.' : '사진에서 영어 단어를 찾지 못했어요. 글자가 크고 선명하게, 그림자 없이 정면에서 다시 찍어 보세요. 손글씨라면 위의 붙여넣기 방법을 써 보세요.'}</div>`;
   }
+  const idle = o.status === 'idle' || o.status === 'error' || (o.status === 'done' && !o.items.length);
+  const canReadClipboard = !!(navigator.clipboard && navigator.clipboard.readText);
   return `<section class="card">
-    <h2>📷 사진으로 추가</h2>
-    ${o.status === 'idle' || o.status === 'error' || (o.status === 'done' && !o.items.length) ? `
-      <p class="small muted">단어장·단어 시험지·기출 해설에서 틀린 단어 부분을 찍으면 영어 단어와 한국어 뜻을 읽어 와요. 사진은 기기 밖으로 보내지 않아요.</p>
-      <label class="btn primary wide">사진 찍기 / 고르기<input type="file" accept="image/*" id="ocrFile" hidden></label>
+    <h2>📷 사진·손글씨로 추가</h2>
+    ${idle ? `
+      <h3>✍️ 손글씨는 폰의 글자 인식으로 (무료)</h3>
+      <ol class="small steps">
+        <li><b>iPhone</b>: 카메라나 사진 앱에서 노트를 비추고 오른쪽 아래 <b>글자 인식 버튼</b>을 누른 뒤 → 전체 선택 → 복사</li>
+        <li><b>갤럭시·안드로이드</b>: 카메라·갤러리의 <b>텍스트 추출(T)</b> 또는 <b>Google 렌즈 → 텍스트</b> → 전체 선택 → 복사</li>
+        <li>아래 칸에 붙여넣고 <b>목록 만들기</b></li>
+      </ol>
+      <textarea id="ocrPaste" rows="5" placeholder="reschedule 일정을 변경하다&#10;itinerary - 여행 일정표&#10;be eligible for&#10;~할 자격이 있다">${esc(o.pasteText)}</textarea>
+      <div class="row ${canReadClipboard ? 'two' : ''}">
+        ${canReadClipboard ? '<button class="btn" data-action="ocrClipboard">📋 붙여넣기</button>' : ''}
+        <button class="btn primary" data-action="ocrParsePaste">목록 만들기</button>
+      </div>
+      <p class="small muted">단어와 뜻을 한 줄에 써도, 뜻을 다음 줄에 써도 돼요. 결과를 확인하고 고친 뒤 추가해요.</p>
+      <h3>📷 인쇄된 글자는 사진으로 바로</h3>
+      <p class="small muted">단어장·시험지·해설처럼 인쇄된 글자는 사진만 고르면 앱이 직접 읽어요. 사진은 기기 밖으로 보내지 않아요. (손글씨는 잘 못 읽어요)</p>
+      <label class="btn wide">사진 찍기 / 고르기<input type="file" accept="image/*" id="ocrFile" hidden></label>
       <label class="switch"><input type="checkbox" data-action="ocrKorean" ${o.withKorean ? 'checked' : ''}> 한국어 뜻도 인식 (조금 느려요)</label>` : ''}
     ${body}
   </section>`;
@@ -324,7 +339,7 @@ function viewOcrCard() {
 
 async function runOcr(file) {
   const o = ui.ocr;
-  Object.assign(o, { status: 'working', step: '사진 준비 중', progress: 0, error: '', items: [] });
+  Object.assign(o, { status: 'working', step: '사진 준비 중', progress: 0, error: '', items: [], source: 'photo' });
   render();
   try {
     const text = await recognizeImage(file, o.withKorean, (step, p) => {
@@ -335,7 +350,7 @@ async function runOcr(file) {
       if (s) s.textContent = step;
       if (bar) bar.style.width = `${Math.round(o.progress * 100)}%`;
     });
-    o.items = parseOcrText(text).map((it) => ({ ...it, checked: true }));
+    o.items = parseOcrText(text, { joinSyllables: true }).map((it) => ({ ...it, checked: true }));
     o.status = 'done';
   } catch (err) {
     console.error(err);
@@ -343,6 +358,29 @@ async function runOcr(file) {
     o.error = err && err.message ? err.message : '인식에 실패했어요. 다시 시도해 주세요.';
   }
   render();
+}
+
+function parsePastedText() {
+  const o = ui.ocr;
+  const text = o.pasteText.trim();
+  if (!text) { toast('먼저 복사한 글을 붙여넣어 주세요.'); return false; }
+  o.items = parseOcrText(text).map((it) => ({ ...it, checked: true }));
+  o.source = 'paste';
+  o.status = 'done';
+  o.error = '';
+  return true;
+}
+
+async function pasteFromClipboard() {
+  try {
+    const text = await navigator.clipboard.readText();
+    if (!text.trim()) { toast('복사한 글이 없어요.'); return; }
+    ui.ocr.pasteText = text;
+    parsePastedText();
+    render();
+  } catch (err) {
+    toast('가져오기가 막혔어요. 칸을 길게 눌러 붙여넣기 해 주세요.');
+  }
 }
 
 function addOcrWords() {
@@ -367,7 +405,7 @@ function addOcrWords() {
     added++;
   });
   save();
-  Object.assign(o, { status: 'idle', items: [] });
+  Object.assign(o, { status: 'idle', items: [], pasteText: '' });
   toast(`새 단어 ${added}개 추가${marked ? ` · 기존 단어 ${marked}개 틀림 처리` : ''}`);
 }
 
@@ -995,6 +1033,8 @@ document.addEventListener('click', (e) => {
       return;
     }
     case 'ocrAdd': addOcrWords(); break;
+    case 'ocrParsePaste': if (!parsePastedText()) return; break;
+    case 'ocrClipboard': pasteFromClipboard(); return;
     case 'ocrClear': Object.assign(ui.ocr, { status: 'idle', items: [] }); break;
     case 'reset':
       if (!confirm('정말 모든 데이터를 삭제할까요? 되돌릴 수 없어요.')) return;
@@ -1064,6 +1104,7 @@ document.addEventListener('change', (e) => {
 
 document.addEventListener('input', (e) => {
   if (e.target.id === 'wordSearch') { ui.wordQuery = e.target.value; renderWordList(); }
+  if (e.target.id === 'ocrPaste') ui.ocr.pasteText = e.target.value;
   if (e.target.dataset.ocr) ui.ocr.items[Number(e.target.dataset.i)][e.target.dataset.ocr] = e.target.value;
 });
 

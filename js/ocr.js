@@ -67,13 +67,20 @@ async function recognizeImage(file, withKorean, onProgress) {
 
 const OCR_STOPWORDS = new Set(('the and for with that this from are was were you your have has had not but all can will would should could its our their they there which what when who whom been into than then also any each more most some such very just only about after before over under out off may must does did done here where how why one two per via upon').split(' '));
 
+// 표현 앞뒤에서 떼어낼 말 (전치사는 'be eligible for'처럼 표현의 일부라 남김)
+const EDGE_TRIM = new Set(['the', 'a', 'an', 'and', 'or', 'but']);
+
 const HANGUL = /[가-힣]/;
 
-// 인식된 글을 [{word, meaning}] 후보로 바꿈.
-// - "영어 [발음] 한국어 뜻" 줄 → 단어(최대 4단어 표현)와 뜻을 짝지음
-// - 영어만 있는 줄 → 단어별로 나눔
-// - 한국어로 시작하는 줄 → 바로 앞 단어의 뜻으로 붙임 (뜻이 다음 줄로 넘어간 경우)
-function parseOcrText(text) {
+// 인식·복사한 글을 [{word, meaning}] 후보로 바꿈. 사진 인식과 붙여넣기에 같이 씀.
+// - "영어 [발음] 한국어 뜻" → 단어(최대 4단어 표현)와 뜻을 짝지음. 한 줄에 여러 쌍도 가능
+//   (예: "reschedule - 일정 변경   itinerary : 여행 일정표")
+// - 영어만 있는 줄 → 쉼표 등으로 나눈 조각이 4단어 이하면 표현 하나로, 길면 단어별로 나눔
+// - 한국어로 시작하는 줄 → 바로 앞 단어의 뜻으로 붙임 (손글씨 노트처럼 뜻을 다음 줄에 쓴 경우)
+const PAIR_RE = /([A-Za-z][A-Za-z'-]*(?:\s+[A-Za-z][A-Za-z'-]*){0,3})[^A-Za-z가-힣]*([가-힣][^A-Za-z]*)/g;
+
+// joinSyllables: 사진 인식 결과처럼 한글이 글자마다 띄어진 경우에만 true
+function parseOcrText(text, { joinSyllables = false } = {}) {
   const out = [];
   const seen = new Set();
   const push = (word, meaning) => {
@@ -83,21 +90,46 @@ function parseOcrText(text) {
     const key = word.toLowerCase();
     if (seen.has(key)) return;
     seen.add(key);
-    out.push({ word, meaning: cleanMeaning(meaning) });
+    out.push({ word, meaning: cleanMeaning(meaning, joinSyllables) });
   };
-  text.split('\n').forEach((raw) => {
-    const line = raw.replace(/\[[^\]]*\]|\/[^/]*\//g, ' ').replace(/[|_~`=<>«»©®“”"]/g, ' ').trim();
-    if (!line) return;
-    const k = line.search(HANGUL);
-    if (k === -1) {
-      line.replace(/[^A-Za-z'\- ]/g, ' ').split(/\s+/).forEach((w) => {
+  const attachMeaning = (kor) => {
+    const last = out[out.length - 1];
+    if (last && !last.meaning && HANGUL.test(kor)) last.meaning = cleanMeaning(kor, joinSyllables);
+  };
+  const pushEnglish = (t) => {
+    t.split(/[,;:/·•()]+/).forEach((chunk) => {
+      let words = chunk.replace(/[^A-Za-z'\- ]/g, ' ').trim().split(/\s+/).filter((w) => /[A-Za-z]/.test(w));
+      while (words.length && EDGE_TRIM.has(words[0].toLowerCase())) words.shift();
+      while (words.length && EDGE_TRIM.has(words[words.length - 1].toLowerCase())) words.pop();
+      if (!words.length) return;
+      if (words.length <= 4) {
+        const w0 = words[0];
+        if (words.length > 1 || (w0.replace(/[^A-Za-z]/g, '').length >= 3 && !OCR_STOPWORDS.has(w0.toLowerCase()))) push(words.join(' '), '');
+        return;
+      }
+      words.forEach((w) => {
         if (w.replace(/[^A-Za-z]/g, '').length >= 3 && !OCR_STOPWORDS.has(w.toLowerCase())) push(w, '');
       });
-      return;
+    });
+  };
+  text.split(/\r?\n/).forEach((raw) => {
+    const line = raw.replace(/\[[^\]]*\]|\/[^/]*\//g, ' ').replace(/[|_~`=<>«»©®“”"]/g, ' ').trim();
+    if (!line) return;
+    if (!HANGUL.test(line)) { pushEnglish(line); return; }
+    let pos = 0;
+    for (const m of line.matchAll(PAIR_RE)) {
+      if (pos === 0) attachMeaning(line.slice(0, m.index)); // 줄 앞쪽 한국어 = 앞 단어의 뜻
+      push(m[1], m[2]);
+      pos = m.index + m[0].length;
     }
-    const eng = line.slice(0, k).match(/[A-Za-z][A-Za-z'-]*(?:\s+[A-Za-z][A-Za-z'-]*){0,3}/);
-    if (eng) push(eng[0], line.slice(k));
-    else if (out.length && !out[out.length - 1].meaning) out[out.length - 1].meaning = cleanMeaning(line);
+    let tail = line.slice(pos);
+    if (pos === 0) {
+      // 짝이 없는 줄: 한국어(앞 단어의 뜻) 다음에 영어가 올 수 있음
+      const e = tail.search(/[A-Za-z]/);
+      attachMeaning(e === -1 ? tail : tail.slice(0, e));
+      tail = e === -1 ? '' : tail.slice(e);
+    }
+    if (tail) pushEnglish(tail);
   });
   return out;
 }
@@ -118,7 +150,7 @@ function joinHangulSyllables(s) {
   return out.join(' ');
 }
 
-function cleanMeaning(s) {
+function cleanMeaning(s, joinSyllables) {
   const t = String(s || '').replace(/[^가-힣A-Za-z0-9\s,;~·()\-.]/g, ' ').replace(/\s+/g, ' ').trim();
-  return joinHangulSyllables(t);
+  return joinSyllables ? joinHangulSyllables(t) : t;
 }

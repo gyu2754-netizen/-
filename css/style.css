@@ -205,3 +205,5 @@ details[open] summary { margin-bottom: 6px; }
 .ocr-fields input[data-ocr=word] { font-weight: 600; }
 .btn[disabled] { opacity: .5; cursor: default; }
 label.btn { cursor: pointer; }
+.steps { margin: 4px 0 8px; padding-left: 20px; }
+.steps li { margin: 4px 0; }
