@@ -39,12 +39,16 @@
         m.querySelector('p').textContent = msg;
       }
       window.addEventListener('error', function (e) {
+        // 외부(CDN) 파일 로드 실패는 해당 기능에서 따로 안내하므로 무시
+        var t = e.target;
+        if (t && t !== window && t.src && t.src.indexOf(location.origin) !== 0) return;
         show((e.message || '스크립트를 불러오지 못했어요') + (e.filename ? ' (' + e.filename.split('/').pop() + ':' + e.lineno + ')' : ''));
       }, true);
       window.addEventListener('unhandledrejection', function (e) { show(String(e.reason)); });
     })();
   </script>
   <script src="js/data.js"></script>
+  <script src="js/ocr.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

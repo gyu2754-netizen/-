@@ -72,6 +72,8 @@ const ui = {
   editMistake: null,
   draftPart: 5,
   moreSub: 'timer',
+  // 사진 인식: status = idle | working | done | error
+  ocr: { status: 'idle', step: '', progress: 0, error: '', items: [], withKorean: true, markWrong: true },
 };
 
 const timer = { presetKey: 'p5', total: 12 * 60, left: 12 * 60, running: false, handle: null, startedAt: 0, elapsedBefore: 0 };
@@ -246,7 +248,8 @@ function viewWordForm() {
   const w = ui.editWord ? state.words.find((x) => x.id === ui.editWord) : null;
   const v = (k) => esc(w ? w[k] || '' : '');
   const lastSource = state.words.length ? state.words[state.words.length - 1].source || '' : '';
-  return `<section class="card">
+  return `${w ? '' : viewOcrCard()}
+  <section class="card">
     <h2>${w ? '단어 수정' : '단어 추가'}</h2>
     <form data-form="word" class="form">
       <label>단어<input name="word" required value="${v('word')}" autocomplete="off" autocapitalize="off"></label>
@@ -275,6 +278,97 @@ function viewWordForm() {
       <button class="btn primary">한 번에 추가</button>
     </form>
   </section>`}`;
+}
+
+const findWord = (word) => state.words.find((x) => x.word.toLowerCase() === word.trim().toLowerCase());
+
+function viewOcrCard() {
+  const o = ui.ocr;
+  let body = '';
+  if (o.status === 'working') {
+    body = `<p class="small" id="ocrStep">${esc(o.step || '사진 준비 중')}</p>
+      <div class="progress"><div id="ocrBar" style="width:${Math.round(o.progress * 100)}%"></div></div>`;
+  } else if (o.status === 'error') {
+    body = `<div class="alert small">${esc(o.error)}</div>`;
+  } else if (o.status === 'done') {
+    const n = o.items.filter((i) => i.checked).length;
+    body = o.items.length ? `
+      <p class="small muted">인식 결과를 확인하고 틀린 글자는 고쳐 주세요. 추가하지 않을 줄은 체크를 풀면 돼요.</p>
+      <ul class="ocr-list">${o.items.map((it, i) => {
+        const exists = findWord(it.word);
+        return `<li class="${it.checked ? '' : 'off'}">
+          <input type="checkbox" data-action="ocrCheck" data-i="${i}" ${it.checked ? 'checked' : ''} aria-label="선택">
+          <div class="grow ocr-fields">
+            <input class="ocr-input" data-ocr="word" data-i="${i}" value="${esc(it.word)}" autocapitalize="off" aria-label="단어">
+            <input class="ocr-input" data-ocr="meaning" data-i="${i}" value="${esc(it.meaning)}" placeholder="뜻 (나중에 채워도 돼요)" aria-label="뜻">
+            ${exists ? `<span class="small warn-text">이미 있는 단어 → ${o.markWrong ? '틀림 처리하고 오늘 다시 복습' : '건너뜀'}</span>` : ''}
+          </div>
+        </li>`;
+      }).join('')}</ul>
+      <label class="switch"><input type="checkbox" data-action="ocrMarkWrong" ${o.markWrong ? 'checked' : ''}> 틀린 단어로 표시 (헷갈린 단어 목록에 들어가요)</label>
+      <div class="row two">
+        <button class="btn" data-action="ocrClear">취소</button>
+        <button class="btn primary" data-action="ocrAdd" ${n ? '' : 'disabled'}>선택한 ${n}개 추가</button>
+      </div>`
+      : `<div class="alert small">사진에서 영어 단어를 찾지 못했어요. 글자가 크고 선명하게, 그림자 없이 정면에서 다시 찍어 보세요.</div>`;
+  }
+  return `<section class="card">
+    <h2>📷 사진으로 추가</h2>
+    ${o.status === 'idle' || o.status === 'error' || (o.status === 'done' && !o.items.length) ? `
+      <p class="small muted">단어장·단어 시험지·기출 해설에서 틀린 단어 부분을 찍으면 영어 단어와 한국어 뜻을 읽어 와요. 사진은 기기 밖으로 보내지 않아요.</p>
+      <label class="btn primary wide">사진 찍기 / 고르기<input type="file" accept="image/*" id="ocrFile" hidden></label>
+      <label class="switch"><input type="checkbox" data-action="ocrKorean" ${o.withKorean ? 'checked' : ''}> 한국어 뜻도 인식 (조금 느려요)</label>` : ''}
+    ${body}
+  </section>`;
+}
+
+async function runOcr(file) {
+  const o = ui.ocr;
+  Object.assign(o, { status: 'working', step: '사진 준비 중', progress: 0, error: '', items: [] });
+  render();
+  try {
+    const text = await recognizeImage(file, o.withKorean, (step, p) => {
+      o.step = step;
+      o.progress = p || 0;
+      const s = document.getElementById('ocrStep');
+      const bar = document.getElementById('ocrBar');
+      if (s) s.textContent = step;
+      if (bar) bar.style.width = `${Math.round(o.progress * 100)}%`;
+    });
+    o.items = parseOcrText(text).map((it) => ({ ...it, checked: true }));
+    o.status = 'done';
+  } catch (err) {
+    console.error(err);
+    o.status = 'error';
+    o.error = err && err.message ? err.message : '인식에 실패했어요. 다시 시도해 주세요.';
+  }
+  render();
+}
+
+function addOcrWords() {
+  const o = ui.ocr;
+  const t = today();
+  const source = `사진 ${t}`;
+  let added = 0, marked = 0;
+  o.items.filter((it) => it.checked && it.word.trim()).forEach((it) => {
+    const existing = findWord(it.word);
+    if (existing) {
+      if (!o.markWrong) return;
+      existing.lapses = (existing.lapses || 0) + 1;
+      existing.stage = 0;
+      existing.due = t;
+      existing.mastered = false;
+      if (!existing.meaning && it.meaning) existing.meaning = it.meaning;
+      marked++;
+      return;
+    }
+    addWord({ word: it.word, meaning: it.meaning, source });
+    if (o.markWrong) state.words[state.words.length - 1].lapses = 1;
+    added++;
+  });
+  save();
+  Object.assign(o, { status: 'idle', items: [] });
+  toast(`새 단어 ${added}개 추가${marked ? ` · 기존 단어 ${marked}개 틀림 처리` : ''}`);
 }
 
 function viewWordListShell() {
@@ -900,6 +994,8 @@ document.addEventListener('click', (e) => {
       download(`toeic-words-${today()}.csv`, '﻿' + [head, ...rows].map((r) => r.map(csvCell).join(',')).join('\n'), 'text/csv');
       return;
     }
+    case 'ocrAdd': addOcrWords(); break;
+    case 'ocrClear': Object.assign(ui.ocr, { status: 'idle', items: [] }); break;
     case 'reset':
       if (!confirm('정말 모든 데이터를 삭제할까요? 되돌릴 수 없어요.')) return;
       state = defaultState();
@@ -913,6 +1009,15 @@ document.addEventListener('click', (e) => {
 /* 변경 (체크박스·셀렉트·파일) */
 document.addEventListener('change', (e) => {
   const el = e.target;
+  if (el.id === 'ocrFile') {
+    const file = el.files[0];
+    el.value = '';
+    if (file) runOcr(file);
+    return;
+  }
+  if (el.dataset.action === 'ocrCheck') { ui.ocr.items[Number(el.dataset.i)].checked = el.checked; render(); return; }
+  if (el.dataset.action === 'ocrKorean') { ui.ocr.withKorean = el.checked; return; }
+  if (el.dataset.action === 'ocrMarkWrong') { ui.ocr.markWrong = el.checked; render(); return; }
   if (el.id === 'importFile') {
     const file = el.files[0];
     if (!file) return;
@@ -959,6 +1064,7 @@ document.addEventListener('change', (e) => {
 
 document.addEventListener('input', (e) => {
   if (e.target.id === 'wordSearch') { ui.wordQuery = e.target.value; renderWordList(); }
+  if (e.target.dataset.ocr) ui.ocr.items[Number(e.target.dataset.i)][e.target.dataset.ocr] = e.target.value;
 });
 
 /* ---------- 타이머 ---------- */

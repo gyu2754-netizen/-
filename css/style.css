@@ -192,3 +192,16 @@ details[open] summary { margin-bottom: 6px; }
   background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 999px; font-size: 14px; z-index: 20;
   max-width: calc(100% - 32px);
 }
+
+/* 사진 인식 */
+.progress { height: 8px; border-radius: 999px; background: var(--line); overflow: hidden; margin: 8px 0; }
+.progress > div { height: 100%; background: var(--primary); transition: width .2s; }
+.ocr-list { list-style: none; margin: 8px 0; padding: 0; }
+.ocr-list li { display: flex; gap: 8px; align-items: flex-start; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.ocr-list li.off { opacity: .45; }
+.ocr-list li > input[type=checkbox] { width: 22px; height: 22px; margin-top: 10px; flex: none; }
+.ocr-fields { display: flex; flex-direction: column; gap: 4px; }
+.ocr-fields input { padding: 7px 9px; }
+.ocr-fields input[data-ocr=word] { font-weight: 600; }
+.btn[disabled] { opacity: .5; cursor: default; }
+label.btn { cursor: pointer; }
